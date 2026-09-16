@@ -42,7 +42,7 @@ if uploaded_file is not None:
             st.error("Could not extract any text. This PDF might be a scanned image.")
             st.stop()
         vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 400})
 
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
         
