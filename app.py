@@ -13,13 +13,15 @@ from langchain_core.prompts import ChatPromptTemplate
 st.set_page_config(page_title="PDF Semantic Search", page_icon="📄")
 st.title("📄 Chat with Your PDF")
 
-api_key = st.sidebar.text_input("Enter your OpenAI API Key", type="password")
-
-if not api_key:
-    st.info("Please add your OpenAI API key in the sidebar to continue.")
-    st.stop()
-    
-os.environ["OPENAI_API_KEY"] = api_key
+# Check Streamlit Cloud Secrets first, fall back to manual sidebar input
+if "OPENAI_API_KEY" in st.secrets:
+    os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+else:
+    api_key = st.sidebar.text_input("Enter your OpenAI API Key", type="password")
+    if not api_key:
+        st.info("Please add your OpenAI API key in the sidebar to continue.")
+        st.stop()
+    os.environ["OPENAI_API_KEY"] = api_key
 
 uploaded_file = st.file_uploader("Upload a PDF document", type="pdf")
 
