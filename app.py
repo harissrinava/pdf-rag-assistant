@@ -1,6 +1,7 @@
 import streamlit as st
 import tempfile
 import os
+import uuid
 
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -23,54 +24,74 @@ else:
         st.stop()
     os.environ["OPENAI_API_KEY"] = api_key
 
+# 1. Initialize user session state
+if "session_id" not in st.session_state:
+    st.session_state.session_id = f"session_{uuid.uuid4().hex}"
+if "rag_chain" not in st.session_state:
+    st.session_state.rag_chain = None
+if "current_file" not in st.session_state:
+    st.session_state.current_file = None
+
 uploaded_file = st.file_uploader("Upload a PDF document", type="pdf")
 
 if uploaded_file is not None:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-        tmp_file.write(uploaded_file.getvalue())
-        tmp_filepath = tmp_file.name
+    # 2. Only index if it's a new or different file for this user session
+    if st.session_state.current_file != uploaded_file.name:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_filepath = tmp_file.name
 
-    with st.spinner("Processing document..."):
-        loader = PyMuPDFLoader(tmp_filepath)
-        docs = loader.load()
-        
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        splits = text_splitter.split_documents(docs)
-
-        embeddings = OpenAIEmbeddings()
-        if len(splits) == 0:
-            st.error("Could not extract any text. This PDF might be a scanned image.")
-            st.stop()
-        vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 400})
-
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-        
-        system_prompt = (
-            "You are an assistant for question-answering tasks. "
-            "Use the following pieces of retrieved context to answer the question. "
-            "If you don't know the answer, say that you don't know. "
-            "Context: {context}"
-        )
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("human", "{input}"),
-        ])
-
-        question_answer_chain = create_stuff_documents_chain(llm, prompt)
-        rag_chain = create_retrieval_chain(retriever, question_answer_chain)
-
-        st.success("Document ready!")
-
-    user_question = st.text_input("Ask a question about the document:")
-    
-    if user_question:
-        with st.spinner("Thinking..."):
-            response = rag_chain.invoke({"input": user_question})
-            st.markdown("### Answer:")
-            st.write(response["answer"])
+        with st.spinner("Processing document..."):
+            loader = PyMuPDFLoader(tmp_filepath)
+            docs = loader.load()
             
-            with st.expander("View Source Text"):
-                for i, doc in enumerate(response["context"]):
-                    st.markdown(f"**Chunk {i+1}:**")
-                    st.write(doc.page_content)
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            splits = text_splitter.split_documents(docs)
+
+            if len(splits) == 0:
+                st.error("Could not extract any text. This PDF might be a scanned image.")
+                st.stop()
+
+            embeddings = OpenAIEmbeddings()
+
+            # Isolate this user's vectors into their own unique Chroma collection
+            vectorstore = Chroma.from_documents(
+                documents=splits,
+                embedding=embeddings,
+                collection_name=st.session_state.session_id
+            )
+            retriever = vectorstore.as_retriever(search_kwargs={"k": 10})
+
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+            
+            system_prompt = (
+                "You are an assistant for question-answering tasks. "
+                "Use the following pieces of retrieved context to answer the question. "
+                "If you don't know the answer, say that you don't know. "
+                "Context: {context}"
+            )
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                ("human", "{input}"),
+            ])
+
+            question_answer_chain = create_stuff_documents_chain(llm, prompt)
+            st.session_state.rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+            st.session_state.current_file = uploaded_file.name
+
+            st.success("Document ready!")
+
+    # 3. Chat Interface using the isolated session chain
+    if st.session_state.rag_chain is not None:
+        user_question = st.text_input("Ask a question about the document:")
+        
+        if user_question:
+            with st.spinner("Thinking..."):
+                response = st.session_state.rag_chain.invoke({"input": user_question})
+                st.markdown("### Answer:")
+                st.write(response["answer"])
+                
+                with st.expander("View Source Text"):
+                    for i, doc in enumerate(response["context"]):
+                        st.markdown(f"**Chunk {i+1}:**")
+                        st.write(doc.page_content)
